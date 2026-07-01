@@ -4,17 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       audio_url:
-        description: 'Audio file URL (MP3)'
+        description: "Audio file URL (MP3)"
         required: true
       cover_url:
-        description: 'Cover image URL (JPG/PNG)'
+        description: "Cover image URL (JPG/PNG)"
+        required: true
+      title:
+        description: "Song title"
+        required: true
+      genre:
+        description: "Genre"
         required: true
       song_id:
-        description: 'Job identifier'
+        description: "Job identifier"
         required: true
-      callback_url:
-        description: 'Webhook URL to POST the result to'
-        required: false
 
 jobs:
   render:
@@ -22,39 +25,22 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Install FFmpeg
         run: sudo apt-get install -y ffmpeg
 
-      - name: Download inputs
+      - name: Download audio and cover
         run: |
-          curl -L "${{ github.event.inputs.audio_url }}" -o audio.mp3
-          curl -L "${{ github.event.inputs.cover_url }}" -o cover.jpg
-
-      - name: Get audio duration
-        id: dur
-        run: |
-          DUR=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 audio.mp3)
-          echo "duration=$DUR" >> $GITHUB_OUTPUT
+          curl -sL "${{ github.event.inputs.audio_url }}" -o audio.mp3
+          curl -sL "${{ github.event.inputs.cover_url }}" -o cover.jpg
+          echo "Audio: $(du -sh audio.mp3)"
+          echo "Cover: $(du -sh cover.jpg)"
 
       - name: Render video
         run: |
-          ffmpeg -y \
-            -loop 1 -i cover.jpg \
-            -i audio.mp3 \
-            -filter_complex "
-              [0:v]scale=1920:1080:force_original_aspect_ratio=decrease,
-                   pad=1920:1080:(ow-iw)/2:(oh-ih)/2,
-                   setsar=1[bg];
-              [1:a]showfreqs=s=1920x200:mode=bar:ascale=log:fscale=lin:
-                            colors=0x9B59B6|0x8E44AD:win_func=hann[bars];
-              [bg][bars]overlay=0:880[v]
-            " \
-            -map "[v]" -map 1:a \
-            -c:v libx264 -preset fast -crf 22 \
-            -c:a aac -b:a 192k \
-            -shortest \
-            -t ${{ steps.dur.outputs.duration }} \
-            output.mp4
+          python render.py             --audio audio.mp3             --cover cover.jpg             --title "${{ github.event.inputs.title }}"             --genre "${{ github.event.inputs.genre }}"             --output output.mp4
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -62,11 +48,3 @@ jobs:
           name: video-${{ github.event.inputs.song_id }}
           path: output.mp4
           retention-days: 1
-
-      - name: Notify callback
-        if: ${{ github.event.inputs.callback_url != '' }}
-        run: |
-          RUN_ID=${{ github.run_id }}
-          curl -s -X POST "${{ github.event.inputs.callback_url }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"song_id\":\"${{ github.event.inputs.song_id }}\",\"run_id\":\"$RUN_ID\",\"status\":\"done\"}"
